@@ -1,0 +1,45 @@
+# ============================================================================
+#  Roda o coletor automaticamente nos servidores do GitHub, sem PC ligado.
+# ============================================================================
+name: Coletor E193
+
+on:
+  schedule:
+    # A cada 30 minutos. O horário do GitHub é em UTC, mas "a cada 30 min"
+    # vale para qualquer fuso. Para mudar a frequência, troque o número:
+    #   '0 * * * *'    -> de hora em hora
+    #   '*/15 * * * *' -> a cada 15 minutos
+    - cron: '*/30 * * * *'
+  workflow_dispatch:   # adiciona um botão "Run workflow" para testar na mão
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar o Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache do navegador (deixa as próximas execuções mais rápidas)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Instalar o navegador Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Rodar o coletor
+        env:
+          E193_USER: ${{ secrets.E193_USER }}
+          E193_PASS: ${{ secrets.E193_PASS }}
+          URL_PONTE: ${{ secrets.URL_PONTE }}
+        run: node coletor.js
