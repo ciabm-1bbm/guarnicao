@@ -4,7 +4,7 @@
   "private": true,
   "description": "Coletor headless da escala do E193 (sem PC ligado)",
   "scripts": {
-    "start": "node coletor.js"
+    "start": "node poa.js"
   },
   "dependencies": {
     "playwright": "^1.48.0"
