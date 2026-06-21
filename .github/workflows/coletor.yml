@@ -5,12 +5,8 @@ name: Coletor E193
 
 on:
   schedule:
-    # A cada 30 minutos. O horário do GitHub é em UTC, mas "a cada 30 min"
-    # vale para qualquer fuso. Para mudar a frequência, troque o número:
-    #   '0 * * * *'    -> de hora em hora
-    #   '*/15 * * * *' -> a cada 15 minutos
-    - cron: '*/30 * * * *'
-  workflow_dispatch:   # adiciona um botão "Run workflow" para testar na mão
+    - cron: '*/30 * * * *'   # a cada 30 minutos
+  workflow_dispatch:         # botão "Run workflow" para testar na mão
 
 jobs:
   coletar:
@@ -23,7 +19,7 @@ jobs:
       - name: Instalar o Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Cache do navegador (deixa as próximas execuções mais rápidas)
         uses: actions/cache@v4
@@ -43,3 +39,14 @@ jobs:
           E193_PASS: ${{ secrets.E193_PASS }}
           URL_PONTE: ${{ secrets.URL_PONTE }}
         run: node poa.js
+
+      # Se der erro, guarda a foto da tela e o HTML para podermos ver o que houve.
+      - name: Salvar diagnóstico (foto e HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico
+          path: |
+            erro.png
+            erro.html
+          if-no-files-found: ignore
