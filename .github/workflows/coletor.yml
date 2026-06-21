@@ -42,4 +42,4 @@ jobs:
           E193_USER: ${{ secrets.E193_USER }}
           E193_PASS: ${{ secrets.E193_PASS }}
           URL_PONTE: ${{ secrets.URL_PONTE }}
-        run: node coletor.js
+        run: node poa.js
