@@ -1,46 +1,77 @@
 // ============================================================================
-//  Coletor E193 — versão headless (sem PC ligado)
-//  Porte fiel do Tampermonkey "Coletor E193 - V37" para Playwright.
-//  Faz login, navega até a escala, filtra Porto Alegre (cidade 325),
-//  lê a tabela e envia os dados para a mesma "ponte" do Google Apps Script.
+//  Coletor E193 — versão headless (sem PC ligado) — COM DIAGNÓSTICO
+//  Se algo der errado, salva "erro.png" (foto da tela) e "erro.html"
+//  para descobrirmos o que a página realmente entregou.
 //
-//  As credenciais NÃO ficam escritas aqui. Vêm das variáveis de ambiente,
-//  que no GitHub são guardadas com segurança em "Secrets".
+//  Credenciais vêm das variáveis de ambiente (Secrets do GitHub),
+//  nunca escritas aqui.
 // ============================================================================
 
 const { chromium } = require('playwright');
+const fs = require('fs');
 
-const USER      = process.env.E193_USER;   // seu id funcional
-const PASS      = process.env.E193_PASS;   // sua senha
-const URL_PONTE = process.env.URL_PONTE;   // URL do seu Google Apps Script (/exec)
+const USER      = process.env.E193_USER;
+const PASS      = process.env.E193_PASS;
+const URL_PONTE = process.env.URL_PONTE;
 
 const URL_BASE = 'https://e193.cbm.rs.gov.br/index.php';
-const CIDADE   = '325'; // código de Porto Alegre, igual ao do seu V37
+const CIDADE   = '325'; // Porto Alegre
+
+// Identifica o robô como um Chrome comum (muitos sites recusam o "headless").
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+          '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 if (!USER || !PASS || !URL_PONTE) {
   console.error('ERRO: faltam variáveis E193_USER, E193_PASS ou URL_PONTE.');
   process.exit(1);
 }
 
+async function salvarDiagnostico(page, motivo) {
+  try {
+    console.log('--- DIAGNÓSTICO (' + motivo + ') ---');
+    console.log('URL atual :', page.url());
+    console.log('Título    :', await page.title());
+    const inputs = await page.$$eval('input', els =>
+      els.map(e => e.name || e.id || e.type || '?'));
+    console.log('Campos input encontrados:', JSON.stringify(inputs));
+    const texto = await page.evaluate(() =>
+      (document.body ? document.body.innerText : '').slice(0, 600));
+    console.log('Texto visível (início):\n' + texto);
+    await page.screenshot({ path: 'erro.png', fullPage: true }).catch(() => {});
+    const html = await page.content().catch(() => '');
+    fs.writeFileSync('erro.html', html);
+    console.log('--- (foto e HTML salvos como erro.png / erro.html) ---');
+  } catch (e) {
+    console.log('Não consegui salvar o diagnóstico:', e.message);
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
-
-  // Fixa o fuso de Brasília para a data padrão da página sair correta,
-  // mesmo o servidor do GitHub rodando em UTC.
   const context = await browser.newContext({
     timezoneId: 'America/Sao_Paulo',
     locale: 'pt-BR',
+    userAgent: UA,
   });
-
   const page = await context.newPage();
   page.setDefaultTimeout(45000);
 
   try {
     console.log('Abrindo o E193...');
-    await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+    await page.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+
+    // Mostra sempre o que chegou (ajuda mesmo quando dá certo).
+    console.log('URL após abrir:', page.url(), '| Título:', await page.title());
 
     // ----- 1) LOGIN ---------------------------------------------------------
-    await page.waitForSelector('input[name="usuario"]');
+    try {
+      await page.waitForSelector('input[name="usuario"]', { timeout: 30000 });
+    } catch (e) {
+      await salvarDiagnostico(page, 'campo de usuario nao apareceu');
+      throw e;
+    }
+
     await page.fill('input[name="usuario"]', USER);
     await page.fill('input[name="senha"]', PASS);
     console.log('Fazendo login...');
@@ -66,7 +97,12 @@ if (!USER || !PASS || !URL_PONTE) {
     }
 
     // ----- 3) FILTRAR CIDADE (Porto Alegre = 325) --------------------------
-    await page.waitForSelector('#id_cidade', { timeout: 45000 });
+    try {
+      await page.waitForSelector('#id_cidade', { timeout: 45000 });
+    } catch (e) {
+      await salvarDiagnostico(page, 'filtro de cidade nao apareceu');
+      throw e;
+    }
     await page.waitForTimeout(1500);
     console.log('Filtrando cidade...');
     await page.evaluate((cidade) => {
@@ -83,13 +119,18 @@ if (!USER || !PASS || !URL_PONTE) {
 
     // ----- 4) ESPERAR A TABELA CARREGAR ------------------------------------
     console.log('Aguardando a tabela...');
-    await page.waitForFunction(() => {
-      const t = document.getElementById('lista_escala');
-      if (!t) return false;
-      const visivel = !t.classList.contains('d-none');
-      const linhas  = t.querySelectorAll('tr').length;
-      return visivel && linhas > 5;
-    }, { timeout: 45000 });
+    try {
+      await page.waitForFunction(() => {
+        const t = document.getElementById('lista_escala');
+        if (!t) return false;
+        const visivel = !t.classList.contains('d-none');
+        const linhas  = t.querySelectorAll('tr').length;
+        return visivel && linhas > 5;
+      }, { timeout: 45000 });
+    } catch (e) {
+      await salvarDiagnostico(page, 'tabela nao carregou');
+      throw e;
+    }
     await page.waitForTimeout(1500);
 
     // ----- 5) EXTRAIR (lógica idêntica ao V37) -----------------------------
@@ -146,12 +187,13 @@ if (!USER || !PASS || !URL_PONTE) {
     });
 
     if (!dados.length) {
-      console.error('Nenhum dado extraído. A estrutura da página pode ter mudado.');
+      await salvarDiagnostico(page, 'tabela carregou mas nao extraiu dados');
+      console.error('Nenhum dado extraído.');
       await browser.close();
       process.exit(1);
     }
 
-    // ----- 6) ENVIAR PARA A PONTE (Google Apps Script) ---------------------
+    // ----- 6) ENVIAR PARA A PONTE ------------------------------------------
     console.log(`Extraídos ${dados.length} registros. Enviando para a ponte...`);
     const resp = await fetch(URL_PONTE, {
       method: 'POST',
@@ -163,7 +205,7 @@ if (!USER || !PASS || !URL_PONTE) {
     else console.log('✅ Sucesso!');
 
   } catch (err) {
-    console.error('Erro durante a coleta:', err);
+    console.error('Erro durante a coleta:', err.message);
     process.exitCode = 1;
   } finally {
     await browser.close();
