@@ -65,21 +65,39 @@ async function salvarDiagnostico(page, motivo) {
     console.log('URL após abrir:', page.url(), '| Título:', await page.title());
 
     // ----- 1) LOGIN ---------------------------------------------------------
+    // Nesta página o campo de usuário se chama "login" (não "usuario"),
+    // e o botão "Entrar" dispara a função startE193().
     try {
-      await page.waitForSelector('input[name="usuario"]', { timeout: 30000 });
+      await page.waitForSelector('#login', { timeout: 30000 });
     } catch (e) {
-      await salvarDiagnostico(page, 'campo de usuario nao apareceu');
+      await salvarDiagnostico(page, 'campo de login nao apareceu');
       throw e;
     }
 
-    await page.fill('input[name="usuario"]', USER);
-    await page.fill('input[name="senha"]', PASS);
+    await page.fill('#login', USER);
+    await page.fill('#senha', PASS);
     console.log('Fazendo login...');
-    await Promise.all([
-      page.waitForLoadState('networkidle').catch(() => {}),
-      page.click('button[type="submit"], input[type="submit"]'),
-    ]);
-    await page.waitForTimeout(2000);
+
+    const acionou = await page.evaluate(() => {
+      if (typeof startE193 === 'function') { startE193(); return true; }
+      return false;
+    }).catch(() => false);
+    if (!acionou) {
+      const btn = await page.$('button.btn-danger') || await page.$('button');
+      if (btn) await btn.click();
+    }
+
+    // Espera realmente sair da tela de login.
+    try {
+      await page.waitForFunction(
+        () => !document.querySelector('#login') || document.querySelector('#main_navbar'),
+        { timeout: 30000 }
+      );
+    } catch (e) {
+      await salvarDiagnostico(page, 'login nao avancou (confira usuario/senha nos Secrets)');
+      throw e;
+    }
+    await page.waitForTimeout(2500);
 
     // ----- 2) NAVEGAR ATÉ A ESCALA -----------------------------------------
     console.log('Navegando para a escala...');
