@@ -114,26 +114,19 @@ async function salvarDiagnostico(page, motivo) {
       if (link) await link.click();
     }
 
-    // ----- 3) FILTRAR CIDADE (Porto Alegre = 325) --------------------------
+    // ----- 3) FILTRAR ------------------------------------------------------
+    // A cidade já vem preenchida como PORTO ALEGRE por padrão (conta lotada lá).
+    // NÃO mexemos no campo (é um autocomplete e quebra a busca). Só filtramos.
     try {
-      await page.waitForSelector('#id_cidade', { timeout: 45000 });
+      await page.waitForSelector('input[value="Filtrar"]', { timeout: 45000 });
     } catch (e) {
-      await salvarDiagnostico(page, 'filtro de cidade nao apareceu');
+      await salvarDiagnostico(page, 'botao Filtrar nao apareceu');
       throw e;
     }
-    await page.waitForTimeout(1500);
-    console.log('Filtrando cidade...');
-    await page.evaluate((cidade) => {
-      const c = document.getElementById('id_cidade');
-      if (!c) return;
-      c.value = cidade;
-      if (window.jQuery) window.jQuery('#id_cidade').val(cidade).trigger('change');
-      else c.dispatchEvent(new Event('change', { bubbles: true }));
-    }, CIDADE);
-
-    const btnFiltrar = await page.$('input[value="Filtrar"]');
-    if (btnFiltrar) await btnFiltrar.click();
-    else await page.evaluate(() => { if (typeof loadEscalas === 'function') loadEscalas(); });
+    await page.waitForTimeout(1000);
+    console.log('Clicando em Filtrar...');
+    await page.click('input[value="Filtrar"]').catch(() => {});
+    await page.evaluate(() => { if (typeof loadEscalas === 'function') loadEscalas(); }).catch(() => {});
 
     // ----- 4) ESPERAR A TABELA CARREGAR ------------------------------------
     console.log('Aguardando a tabela...');
@@ -143,7 +136,7 @@ async function salvarDiagnostico(page, motivo) {
         if (!t) return false;
         const visivel = !t.classList.contains('d-none');
         const linhas  = t.querySelectorAll('tr').length;
-        return visivel && linhas > 5;
+        return visivel && linhas > 3;
       }, { timeout: 45000 });
     } catch (e) {
       await salvarDiagnostico(page, 'tabela nao carregou');
