@@ -34,6 +34,11 @@ async function salvarDiagnostico(page, motivo) {
     const inputs = await page.$$eval('input', els =>
       els.map(e => e.name || e.id || e.type || '?'));
     console.log('Campos input encontrados:', JSON.stringify(inputs));
+    const cidadeVal = await page.evaluate(() => {
+      const c = document.getElementById('id_cidade');
+      return c ? c.value : '(campo ausente)';
+    }).catch(() => '?');
+    console.log('Valor de id_cidade:', JSON.stringify(cidadeVal));
     const texto = await page.evaluate(() =>
       (document.body ? document.body.innerText : '').slice(0, 600));
     console.log('Texto visível (início):\n' + texto);
@@ -115,18 +120,24 @@ async function salvarDiagnostico(page, motivo) {
     }
 
     // ----- 3) FILTRAR ------------------------------------------------------
-    // A cidade já vem preenchida como PORTO ALEGRE por padrão (conta lotada lá).
-    // NÃO mexemos no campo (é um autocomplete e quebra a busca). Só filtramos.
+    // O campo de cidade é um autocomplete: o NOME aparece na caixa visível, mas
+    // o VALOR real (o código) fica no input escondido #id_cidade — que no robô
+    // vem vazio. A busca (loadEscalas) lê #id_cidade.value, então colocamos o
+    // código de Porto Alegre (325) direto nesse input e chamamos loadEscalas()
+    // na mesma hora, sem tocar na parte visual (mexer nela quebrava a busca).
     try {
       await page.waitForSelector('input[value="Filtrar"]', { timeout: 45000 });
     } catch (e) {
       await salvarDiagnostico(page, 'botao Filtrar nao apareceu');
       throw e;
     }
-    await page.waitForTimeout(1000);
-    console.log('Clicando em Filtrar...');
-    await page.click('input[value="Filtrar"]').catch(() => {});
-    await page.evaluate(() => { if (typeof loadEscalas === 'function') loadEscalas(); }).catch(() => {});
+    await page.waitForTimeout(1500);
+    console.log('Definindo cidade (325) e filtrando...');
+    await page.evaluate((cidade) => {
+      const c = document.getElementById('id_cidade');
+      if (c) c.value = cidade;
+      if (typeof loadEscalas === 'function') loadEscalas();
+    }, CIDADE);
 
     // ----- 4) ESPERAR A TABELA CARREGAR ------------------------------------
     console.log('Aguardando a tabela...');
