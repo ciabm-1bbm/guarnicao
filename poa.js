@@ -104,19 +104,48 @@ async function salvarDiagnostico(page, motivo) {
     }
     await page.waitForTimeout(2500);
 
-    // ----- 2) NAVEGAR ATÉ A ESCALA -----------------------------------------
-    console.log('Navegando para a escala...');
-    const navegouPelaFuncao = await page.evaluate(() => {
-      if (typeof loadModulo === 'function') {
-        loadModulo('gua', '23', 'cons_guarnicao.php');
-        return true;
-      }
-      return false;
-    }).catch(() => false);
+    // ----- 1.5) FECHAR AVISOS/MODAIS PÓS-LOGIN -----------------------------
+    // O E193 às vezes mostra o modal "Dados Desatualizados" (fechado por
+    // FecharSenha()) e avisos em bPopup, que travam a tela inteira. Fechamos
+    // tudo antes de navegar.
+    await page.evaluate(() => {
+      try { if (typeof FecharSenha === 'function') FecharSenha(); } catch (e) {}
+      try {
+        if (window.jQuery) {
+          jQuery('.b-close').trigger('click');
+          jQuery('#popup, #aviso_deslocamento').hide();
+        }
+      } catch (e) {}
+      document.querySelectorAll('.modal.show').forEach(m => {
+        m.classList.remove('show'); m.style.display = 'none';
+      });
+      document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+      document.body.classList.remove('modal-open');
+      document.body.style.overflow = '';
+      document.body.style.paddingRight = '';
+    }).catch(() => {});
+    await page.waitForTimeout(1000);
 
-    if (!navegouPelaFuncao) {
-      const link = await page.$('a[href*="cons_guarnicao.php"]');
-      if (link) await link.click();
+    // ----- 2) NAVEGAR ATÉ A ESCALA (com algumas tentativas) ----------------
+    console.log('Navegando para a escala...');
+    let chegou = false;
+    for (let i = 0; i < 4 && !chegou; i++) {
+      await page.evaluate(() => {
+        // fecha de novo qualquer aviso que tenha reaparecido
+        try { if (typeof FecharSenha === 'function') FecharSenha(); } catch (e) {}
+        if (typeof loadModulo === 'function') {
+          loadModulo('gua', '23', 'cons_guarnicao.php');
+        } else {
+          const link = document.querySelector('a[href*="cons_guarnicao.php"]');
+          if (link) link.click();
+        }
+      }).catch(() => {});
+      chegou = await page.waitForSelector('input[value="Filtrar"]', { timeout: 20000 })
+        .then(() => true).catch(() => false);
+    }
+    if (!chegou) {
+      await salvarDiagnostico(page, 'nao cheguei na tela do filtro (escala)');
+      throw new Error('Nao cheguei na tela do filtro');
     }
 
     // ----- 3) FILTRAR ------------------------------------------------------
