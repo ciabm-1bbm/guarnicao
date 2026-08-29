@@ -1,0 +1,92 @@
+# ============================================================================
+#  Ocorrências do mês (1º BBM) — dado FECHADO, do relatório Mapa de Calor.
+#
+#  Roda neste repositório (guarnicao, privado), onde ficam as credenciais,
+#  mas PUBLICA o CSV no repositório do site (público), que é de onde o
+#  painel do CIOSP lê. Repositório privado não serve pelo raw.
+# ============================================================================
+name: Ocorrências do mês (1º BBM)
+
+on:
+  schedule:
+    - cron: '0 * * * *'      # de hora em hora (o dado só muda no fechamento)
+  workflow_dispatch:         # botão "Run workflow" para testar na mão
+
+concurrency:
+  # Duas sessões simultâneas no E193 se atrapalham. Se uma execução passar
+  # da hora, a próxima espera em vez de rodar junto.
+  group: ocorrencias
+  cancel-in-progress: false
+
+env:
+  REPO_SITE: ciabm-1bbm/site
+  ARQUIVO: dados/PAINEL_MES_ATUAL.csv
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15      # relatório de mês inteiro demora mais que a escala
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar o Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache do navegador (deixa as próximas execuções mais rápidas)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Instalar o navegador Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Rodar o coletor
+        env:
+          E193_USER: ${{ secrets.E193_USER }}
+          E193_PASS: ${{ secrets.E193_PASS }}
+        run: node Ocorrencias.js
+
+      # Se der erro, guarda a foto da tela e o HTML para podermos ver o que houve.
+      - name: Salvar diagnóstico (foto e HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-ocorrencias
+          path: |
+            erro.png
+            erro.html
+          if-no-files-found: ignore
+
+      # O painel está no repositório público do site. O TOKEN_SITE é um
+      # Personal Access Token com permissão de escrita apenas nele.
+      - name: Baixar o repositório do site
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_SITE }}
+          token: ${{ secrets.TOKEN_SITE }}
+          path: site
+
+      - name: Publicar o CSV no site
+        run: |
+          mkdir -p "site/$(dirname "$ARQUIVO")"
+          cp "$ARQUIVO" "site/$ARQUIVO"
+          cd site
+          git config user.name  "coletor-ocorrencias"
+          git config user.email "actions@users.noreply.github.com"
+          git add "$ARQUIVO"
+          # Sem mudança não há o que commitar, e isso é normal: se ninguém
+          # fechou ocorrência na última hora, o arquivo é o mesmo.
+          if git diff --staged --quiet; then
+            echo "Nada mudou desde a última coleta."
+          else
+            git commit -m "Ocorrências do mês — $(TZ=America/Sao_Paulo date '+%d/%m %H:%M')"
+            git pull --rebase --autostash
+            git push
+          fi
