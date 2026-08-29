@@ -197,19 +197,35 @@ async function fecharAvisos(page) {
     await page.waitForTimeout(1500);
 
     // ----- 5) EXTRAIR ------------------------------------------------------
-    // O DataTables guarda TODAS as linhas do lado do navegador, então
-    // rows().data() traz o conjunto inteiro sem precisar paginar de 10 em 10.
+    // ATENÇÃO: rows().data() devolve os dados BRUTOS que alimentam o mapa de
+    // calor (id, data, hora, latitude, longitude...), e não as colunas que
+    // aparecem na tela. Usá-lo grava coordenada no lugar de Emergência.
+    // O jeito certo é mandar o DataTables exibir todas as linhas e ler o
+    // texto renderizado de cada célula.
+    const totalLinhas = await page.evaluate(() =>
+      window.jQuery('#oc_table').DataTable().rows().count());
+    console.log(`Tabela tem ${totalLinhas} linhas. Exibindo todas...`);
+
+    await page.evaluate(() =>
+      window.jQuery('#oc_table').DataTable().page.len(-1).draw());
+    await page.waitForFunction(
+      n => document.querySelectorAll('#oc_table tbody tr').length >= n,
+      totalLinhas, { timeout: 120000 }
+    ).catch(() => console.log('Aviso: nem todas as linhas foram desenhadas.'));
+    await page.waitForTimeout(1500);
+
     console.log('Extraindo dados...');
     const linhas = await page.evaluate(() => {
-      const dt = window.jQuery('#oc_table').DataTable();
-      const limpar = html => {
-        const d = document.createElement('div');
-        d.innerHTML = html == null ? '' : html;
-        return (d.textContent || '').replace(/\s+/g, ' ').trim();
-      };
-      return dt.rows().data().toArray()
-        .map(l => (Array.isArray(l) ? l : Object.values(l)).map(limpar))
-        .map(c => c.slice(0, 6));   // a 7ª coluna é o botão "Detalhar"
+      const out = [];
+      document.querySelectorAll('#oc_table tbody tr').forEach(tr => {
+        // Linhas de agrupamento ("PORTO ALEGRE - 722 Ocorrências") usam <th>
+        // com colspan e não têm células de dado.
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 5) return;
+        out.push([...tds].slice(0, 6)
+          .map(td => (td.innerText || '').replace(/\s+/g, ' ').trim()));
+      });
+      return out;
     });
 
     const info = await page.textContent('#oc_table_info').catch(() => '') || '';
@@ -221,6 +237,20 @@ async function fecharAvisos(page) {
     if (!linhas.length) {
       await salvarDiagnostico(page, 'tabela carregou mas nao extraiu dados');
       throw new Error('Nenhum dado extraído — arquivo anterior mantido');
+    }
+
+    // Confere se as colunas são as esperadas antes de gravar. Já aconteceu de
+    // virem coordenadas no lugar da natureza, e o CSV saiu com cara de bom —
+    // um painel desenhando latitude como "tipo de ocorrência" é pior que um
+    // painel vazio, porque ninguém desconfia.
+    const comNatureza = linhas.filter(l => /[A-Za-zÀ-ú]{3}/.test(l[4] || '')).length;
+    const comData = linhas.filter(l => /\d{2}\/\d{2}\/\d{4}/.test(l[1] || '')).length;
+    console.log(`Conferência: ${comData}/${linhas.length} com data válida, ` +
+                `${comNatureza}/${linhas.length} com natureza em texto.`);
+    console.log('Exemplo de linha:', JSON.stringify(linhas[0]));
+    if (comNatureza < linhas.length * 0.8 || comData < linhas.length * 0.8) {
+      await salvarDiagnostico(page, 'colunas fora do esperado');
+      throw new Error('As colunas não são as esperadas — arquivo anterior mantido');
     }
 
     // ----- 6) GRAVAR O CSV -------------------------------------------------
