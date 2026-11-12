@@ -61,89 +61,48 @@ async function salvarDiagnostico(page, motivo) {
   const page = await context.newPage();
   page.setDefaultTimeout(45000);
 
-  // ----- ESPIÕES DE REDE (para descobrir o que loadEscalas faz) -----------
-  page.on('request', req => {
-    const u = req.url();
-    const m = req.method();
-    if (u.includes('cons_guarnicao') || u.toLowerCase().includes('escala') ||
-        (m === 'POST' && u.includes('index.php'))) {
-      let body = '';
-      try { body = (req.postData() || '').slice(0, 300); } catch (e) {}
-      console.log('>> REQ', m, u, body ? ('| body: ' + body) : '');
-    }
-  });
-  page.on('response', resp => {
-    const u = resp.url();
-    if (u.includes('cons_guarnicao') || u.toLowerCase().includes('escala') ||
-        (resp.request().method() === 'POST' && u.includes('index.php'))) {
-      console.log('<< RESP', resp.status(), u);
-    }
-  });
-  page.on('console', msg => {
-    if (msg.type() === 'error') console.log('PAGE-ERROR:', msg.text().slice(0, 300));
-  });
-  page.on('requestfailed', req => {
-    console.log('REQ-FAILED:', req.url(), (req.failure() && req.failure().errorText) || '');
-  });
-
   try {
-    // ----- 1) LOGIN (via Keycloak / SSO) -----------------------------------
-    // O E193 passou a usar login único (Keycloak). A tela inicial só tem o
-    // botão "Entrar", que leva para /auth/keycloak.php?action=login e redireciona
-    // para a página do Keycloak, onde se informa Id Funcional e Senha.
-    console.log('Indo para o login (Keycloak)...');
-    await page.goto('https://e193.cbm.rs.gov.br/auth/keycloak.php?action=login',
-      { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(1500);
-    console.log('URL do login:', page.url(), '| Título:', await page.title());
-
-    // Campos da tela do Keycloak. O padrão é #username / #password / #kc-login,
-    // mas cobrimos variações (inclusive os antigos #login / #senha) por segurança.
-    const SEL_USER = '#username, input[name="username"], #login, input[name="login"]';
-    const SEL_PASS = '#password, input[name="password"], #senha, input[name="senha"]';
-    const SEL_BTN  = '#kc-login, input[type="submit"], button[type="submit"], button[name="login"]';
-
-    try {
-      await page.waitForSelector(SEL_USER, { timeout: 30000 });
-    } catch (e) {
-      await salvarDiagnostico(page, 'tela de login (Keycloak) nao apareceu');
-      throw e;
-    }
-
-    console.log('Preenchendo Id Funcional e Senha...');
-    await page.fill(SEL_USER, USER);
-    await page.fill(SEL_PASS, PASS);
-
-    // Envia o login e espera voltar para o E193 autenticado.
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle', timeout: 45000 }).catch(() => {}),
-      page.click(SEL_BTN).catch(async () => {
-        await page.evaluate((sel) => {
-          const b = document.querySelector(sel);
-          if (b) b.click(); else { const f = document.querySelector('form'); if (f) f.submit(); }
-        }, SEL_BTN);
-      }),
-    ]);
-    await page.waitForTimeout(2500);
-
-    // Confirma que voltou para o E193 e saiu da tela do Keycloak.
-    try {
-      await page.waitForFunction(() => {
-        const naoEhLogin = !document.querySelector('#kc-login') &&
-                           !document.querySelector('#username') &&
-                           !document.querySelector('input[name="password"]');
-        const temApp = document.querySelector('#main_navbar') ||
-                       /e193\.cbm\.rs\.gov\.br\/(index\.php)?$/.test(location.href) ||
-                       document.querySelector('a[href*="cons_guarnicao.php"]') ||
-                       typeof loadModulo === 'function';
-        return naoEhLogin && temApp;
-      }, { timeout: 30000 });
-    } catch (e) {
-      await salvarDiagnostico(page, 'login nao avancou (confira Id Funcional/Senha nos Secrets, e se o acesso ao e193 ainda e valido)');
-      throw e;
-    }
-    console.log('Login OK. URL:', page.url());
+    console.log('Abrindo o E193...');
+    await page.goto(URL_BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(2000);
+
+    // Mostra sempre o que chegou (ajuda mesmo quando dá certo).
+    console.log('URL após abrir:', page.url(), '| Título:', await page.title());
+
+    // ----- 1) LOGIN ---------------------------------------------------------
+    // Nesta página o campo de usuário se chama "login" (não "usuario"),
+    // e o botão "Entrar" dispara a função startE193().
+    try {
+      await page.waitForSelector('#login', { timeout: 30000 });
+    } catch (e) {
+      await salvarDiagnostico(page, 'campo de login nao apareceu');
+      throw e;
+    }
+
+    await page.fill('#login', USER);
+    await page.fill('#senha', PASS);
+    console.log('Fazendo login...');
+
+    const acionou = await page.evaluate(() => {
+      if (typeof startE193 === 'function') { startE193(); return true; }
+      return false;
+    }).catch(() => false);
+    if (!acionou) {
+      const btn = await page.$('button.btn-danger') || await page.$('button');
+      if (btn) await btn.click();
+    }
+
+    // Espera realmente sair da tela de login.
+    try {
+      await page.waitForFunction(
+        () => !document.querySelector('#login') || document.querySelector('#main_navbar'),
+        { timeout: 30000 }
+      );
+    } catch (e) {
+      await salvarDiagnostico(page, 'login nao avancou (confira usuario/senha nos Secrets)');
+      throw e;
+    }
+    await page.waitForTimeout(2500);
 
     // ----- 1.5) FECHAR AVISOS/MODAIS PÓS-LOGIN -----------------------------
     // O E193 às vezes mostra o modal "Dados Desatualizados" (fechado por
@@ -202,22 +161,12 @@ async function salvarDiagnostico(page, motivo) {
       throw e;
     }
     await page.waitForTimeout(1500);
-    console.log('Selecionando cidade (325) e filtrando...');
+    console.log('Definindo cidade (325) e filtrando...');
     await page.evaluate((cidade) => {
-      // Seleção correta pelo dropdown do Semantic UI (dispara o onChange).
-      try {
-        if (window.jQuery && jQuery.fn.dropdown) {
-          jQuery('.ui.dropdown.id_cidade').dropdown('set selected', cidade);
-        }
-      } catch (e) {}
       const c = document.getElementById('id_cidade');
-      if (c) c.value = cidade; // reforço
+      if (c) c.value = cidade;
+      if (typeof loadEscalas === 'function') loadEscalas();
     }, CIDADE);
-    await page.waitForTimeout(800);
-
-    // Clica no botão Filtrar de verdade (ele chama loadEscalas()).
-    await page.click('input[value="Filtrar"]').catch(() => {});
-    await page.evaluate(() => { if (typeof loadEscalas === 'function') loadEscalas(); }).catch(() => {});
 
     // ----- 4) ESPERAR A TABELA CARREGAR ------------------------------------
     console.log('Aguardando a tabela...');
